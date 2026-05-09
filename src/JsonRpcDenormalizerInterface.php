@@ -7,9 +7,11 @@ namespace Kraz\ReadModelJsonRpc;
 interface JsonRpcDenormalizerInterface
 {
     /**
-     * @template T of object
+     * @phpstan-param class-string<T>|string $type
      *
-     * @psalm-param class-string<T>|string $type
+     * @phpstan-return ($type is class-string<T> ? T : mixed)
+     *
+     * @phpstan-template T of object
      */
     public function denormalize(mixed $data, string $type): mixed;
 }

@@ -6,15 +6,13 @@ namespace Kraz\ReadModelJsonRpc;
 
 use Kraz\ReadModel\ReadResponse;
 
-/**
- * @template-covariant T
- */
+/** @phpstan-template-covariant T of object|array<string, mixed> */
 interface JsonRpcReadClientInterface
 {
     /**
-     * @param array<string, mixed>|null $params
+     * @phpstan-param array<string, mixed>|null $params
      *
-     * @return ReadResponse<covariant T>
+     * @phpstan-return ReadResponse<covariant T>
      */
-    public function read(?array $params = null): ReadResponse;
+    public function read(array|null $params = null): ReadResponse;
 }

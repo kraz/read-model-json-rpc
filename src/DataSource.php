@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Kraz\ReadModelJsonRpc;
 
+use ArrayIterator;
+use InvalidArgumentException;
 use Kraz\JsonRpcClient\JsonRpcClientInterface;
 use Kraz\ReadModel\Pagination\InMemoryPaginator;
 use Kraz\ReadModel\Pagination\PaginatorInterface;
@@ -14,14 +16,26 @@ use Kraz\ReadModel\ReadDataProviderCompositionInterface;
 use Kraz\ReadModel\ReadDataProviderInterface;
 use Kraz\ReadModel\ReadDataProviderPayload;
 use Kraz\ReadModel\ReadResponse;
+use LogicException;
 use Nyholm\Psr7\Factory\Psr17Factory;
+use Override;
 use Psr\Http\Message\RequestInterface;
+use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
+use Traversable;
+
+use function array_filter;
+use function array_reduce;
+use function array_values;
+use function class_exists;
+use function count;
+use function iterator_to_array;
+use function parse_str;
+use function sprintf;
 
 /**
- * @template T of array<string, mixed>|object
- *
+ * @phpstan-template-covariant T of array<string, mixed>|object
  * @implements ReadDataProviderInterface<T>
  */
 class DataSource implements ReadDataProviderInterface
@@ -31,18 +45,14 @@ class DataSource implements ReadDataProviderInterface
     /** @use ReadDataProviderComposition<T> */
     use ReadDataProviderComposition;
 
-    /**
-     * @var ReadDataProviderPayload<T>|null
-     */
-    private ?ReadDataProviderPayload $payload = null;
-    private ?PaginatorInterface $paginatorInstance = null;
+    /** @phpstan-var ReadDataProviderPayload<T>|null */
+    private ReadDataProviderPayload|null $payload = null;
+    /** @phpstan-var PaginatorInterface<T>|null */
+    private PaginatorInterface|null $paginatorInstance = null;
 
-    /**
-     * @param JsonRpcClientInterface&JsonRpcReadClientInterface<T> $client
-     */
+    /** @phpstan-param JsonRpcClientInterface&JsonRpcReadClientInterface<T> $client */
     public function __construct(
         private readonly JsonRpcClientInterface&JsonRpcReadClientInterface $client,
-        private readonly string $identifierField = 'id',
         private readonly string $pageParamName = 'page',
         private readonly string $pageSizeParamName = 'pageSize',
         private readonly string $limitParamName = 'limit',
@@ -50,55 +60,55 @@ class DataSource implements ReadDataProviderInterface
     ) {
     }
 
-    /**
-     * @return ReadDataProviderPayload<T>
-     */
+    /** @return ReadDataProviderPayload<T> */
     private function getPayload(): ReadDataProviderPayload
     {
-        if (null !== $this->payload) {
+        if ($this->payload !== null) {
             return $this->payload;
         }
 
+        /** @phpstan-var ReadResponse<T> $result */
         $result = $this->client->read($this->getParams());
 
-        /** @psalm-suppress ArgumentTypeCoercion */
-        /** @var ReadDataProviderPayload<T> $payload */
-        $payload = new ReadDataProviderPayload($result);
+        /** @phpstan-var ReadDataProviderPayload<T> $payload */
+        $payload       = new ReadDataProviderPayload($result);
         $this->payload = $payload;
 
         return $this->payload;
     }
 
-    private function getWrappedQueryExpression(): ?QueryExpression
+    private function getWrappedQueryExpression(): QueryExpression|null
     {
-        if (0 === \count($this->queryExpressions)) {
+        if (count($this->queryExpressions) === 0) {
             return null;
         }
 
-        if (1 === \count($this->queryExpressions)) {
+        if (count($this->queryExpressions) === 1) {
             return clone $this->queryExpressions[0];
         }
 
         return array_reduce($this->queryExpressions, static fn (QueryExpression $qx, QueryExpression $item) => $qx->wrap($item), QueryExpression::create());
     }
 
+    /** @phpstan-return array<string, mixed> */
     private function getParams(): array
     {
         $params = $this->getWrappedQueryExpression()?->toArray() ?? [];
-        if (\count($params) > 0) {
+        if (count($params) > 0) {
             $fieldMapping = $this->getOrCreateQueryExpressionProvider()->getFieldMapping();
-            if (\count($fieldMapping) > 0) {
+            if (count($fieldMapping) > 0) {
                 $params = QueryExpression::applyFieldMapping($params, $fieldMapping);
             }
         }
-        if ($this->isPaginated()) {
-            [$page, $itemsPerPage] = $this->pagination;
-            $params[$this->pageParamName] = $page;
+
+        if ($this->pagination !== null) {
+            [$page, $itemsPerPage]            = $this->pagination;
+            $params[$this->pageParamName]     = $page;
             $params[$this->pageSizeParamName] = $itemsPerPage;
-        } elseif (null !== $this->limit) {
-            [$limitValue, $offsetValue] = $this->limit;
+        } elseif ($this->limit !== null) {
+            [$limitValue, $offsetValue]    = $this->limit;
             $params[$this->limitParamName] = $limitValue;
-            if (null !== $offsetValue && $offsetValue > 0) {
+            if ($offsetValue !== null && $offsetValue > 0) {
                 $params[$this->offsetParamName] = $offsetValue;
             }
         }
@@ -106,27 +116,25 @@ class DataSource implements ReadDataProviderInterface
         return $params;
     }
 
-    #[\Override]
+    #[Override]
     public function withQueryModifier(callable $modifier, bool $append = false): static
     {
-        throw new \LogicException('Query modifiers are not supported in the JsonRpc DataSource.');
+        throw new LogicException('Query modifiers are not supported in the JsonRpc DataSource.');
     }
 
-    /**
-     * @return array<int, T>
-     */
+    /** @return array<int, T> */
     private function filteredItems(): array
     {
         $items = $this->getPayload()->getData();
 
-        if (0 === \count($this->specifications)) {
+        if (count($this->specifications) === 0) {
             return $items;
         }
 
         return array_values(array_filter($items, function (mixed $item): bool {
             foreach ($this->specifications as $specification) {
-                /** @var T $item */
-                if (!$specification->isSatisfiedBy($item)) {
+                /** @phpstan-var T $item */
+                if (! $specification->isSatisfiedBy($item)) {
                     return false;
                 }
             }
@@ -135,19 +143,20 @@ class DataSource implements ReadDataProviderInterface
         }));
     }
 
-    #[\Override]
+    #[Override]
     public function count(): int
     {
         $this->assertNoSpecifications();
 
-        if (null !== $paginator = $this->paginator()) {
+        $paginator = $this->paginator();
+        if ($paginator !== null) {
             return $paginator->count();
         }
 
-        return \count($this->filteredItems());
+        return count($this->filteredItems());
     }
 
-    #[\Override]
+    #[Override]
     public function totalCount(): int
     {
         $this->assertNoSpecifications();
@@ -155,14 +164,14 @@ class DataSource implements ReadDataProviderInterface
         return $this->getPayload()->getTotalItems();
     }
 
-    #[\Override]
+    #[Override]
     public function isPaginated(): bool
     {
-        if (\count($this->specifications) > 0) {
+        if (count($this->specifications) > 0) {
             return false;
         }
 
-        if (null === $this->pagination) {
+        if ($this->pagination === null) {
             return false;
         }
 
@@ -171,22 +180,23 @@ class DataSource implements ReadDataProviderInterface
         return $page > 0 && $itemsPerPage > 0;
     }
 
-    #[\Override]
+    #[Override]
     public function isEmpty(): bool
     {
         $this->assertNoSpecifications();
 
-        return 0 === $this->totalCount();
+        return $this->totalCount() === 0;
     }
 
-    #[\Override]
-    public function getIterator(): \Traversable
+    #[Override]
+    public function getIterator(): Traversable
     {
         $specifications = $this->specifications;
-        $hasSpecs = \count($specifications) > 0;
+        $hasSpecs       = count($specifications) > 0;
 
-        if ($hasSpecs && null !== $this->limit) {
+        if ($hasSpecs && $this->limit !== null) {
             [$limitValue, $offsetValue] = $this->limit;
+
             yield from $this->withoutSpecification()->withoutLimit()->specificationsIterator(
                 $specifications,
                 $limitValue,
@@ -197,15 +207,14 @@ class DataSource implements ReadDataProviderInterface
         }
 
         if ($hasSpecs) {
-            $items = new \ArrayIterator($this->filteredItems());
-        } elseif (null !== $paginator = $this->paginator()) {
-            $items = $paginator->getIterator();
+            $items = new ArrayIterator($this->filteredItems());
         } else {
-            $items = new \ArrayIterator($this->filteredItems());
+            $paginator = $this->paginator();
+            $items     = $paginator?->getIterator() ?? new ArrayIterator($this->filteredItems());
         }
 
         $itemNormalizer = $this->itemNormalizer;
-        if (null !== $itemNormalizer) {
+        if ($itemNormalizer !== null) {
             foreach ($items as $item) {
                 yield $itemNormalizer($item);
             }
@@ -216,13 +225,13 @@ class DataSource implements ReadDataProviderInterface
         yield from $items;
     }
 
-    #[\Override]
+    #[Override]
     public function data(): array
     {
         return iterator_to_array($this->getIterator());
     }
 
-    #[\Override]
+    #[Override]
     public function getResult(): array|ReadResponse
     {
         $this->assertNoSpecifications();
@@ -240,43 +249,44 @@ class DataSource implements ReadDataProviderInterface
         );
     }
 
-    /**
-     * @return PaginatorInterface<T>|null
-     */
-    public function paginator(): ?PaginatorInterface
+    /** @return PaginatorInterface<T>|null */
+    public function paginator(): PaginatorInterface|null
     {
         $this->assertNoSpecifications();
 
-        if (!$this->isPaginated() || $this->isValue()) {
+        if ($this->paginatorInstance !== null) {
+            return $this->paginatorInstance;
+        }
+
+        if ($this->pagination === null) {
             return null;
         }
 
-        if (null === $this->paginatorInstance) {
-            [$page, $itemsPerPage] = $this->pagination;
-            $payload = $this->getPayload();
-            $iterator = \count($this->specifications) > 0
-                ? new \ArrayIterator($this->filteredItems())
-                : $payload->getIterator();
-            $this->paginatorInstance = new InMemoryPaginator(
-                $iterator,
-                $payload->getTotalItems(),
-                $payload->getCurrentPage() ?: $page,
-                $itemsPerPage,
-                0
-            );
-        }
+        [$page, $itemsPerPage] = $this->pagination;
+        $payload               = $this->getPayload();
+        $iterator              = count($this->specifications) > 0
+            ? new ArrayIterator($this->filteredItems())
+            : $payload->getIterator();
+
+        $this->paginatorInstance = new InMemoryPaginator(
+            $iterator,
+            $payload->getTotalItems(),
+            $payload->getCurrentPage() ?: $page,
+            $itemsPerPage,
+            0,
+        );
 
         return $this->paginatorInstance;
     }
 
     private function assertNoSpecifications(): void
     {
-        if (\count($this->specifications) > 0) {
-            throw new \LogicException('Cannot use this method when specifications are set. Use getIterator() or data() instead.');
+        if (count($this->specifications) > 0) {
+            throw new LogicException('Cannot use this method when specifications are set. Use getIterator() or data() instead.');
         }
     }
 
-    #[\Override]
+    #[Override]
     public function handleRequest(object $request, array $fieldsOperator = [], array $fieldsIgnoreCase = []): static
     {
         /** @phpstan-var static<T> $ds */
@@ -287,37 +297,36 @@ class DataSource implements ReadDataProviderInterface
 
     public function __clone()
     {
-        $this->payload = null;
+        $this->payload           = null;
         $this->paginatorInstance = null;
     }
 
     /**
-     * @phpstan-param ReadDataProviderCompositionInterface $target
+     * @phpstan-param J $target
      * @phpstan-param array<string, string> $fieldsOperator
      * @phpstan-param array<string, bool> $fieldsIgnoreCase
      *
-     * @phpstan-return ReadDataProviderCompositionInterface
+     * @phpstan-return J
      *
      * @phpstan-template J of ReadDataProviderCompositionInterface<object|array<string, mixed>>
      */
     public static function applyRequestTo(ReadDataProviderCompositionInterface $target, object $request, array $fieldsOperator = [], array $fieldsIgnoreCase = []): ReadDataProviderCompositionInterface
     {
         if (class_exists(SymfonyRequest::class) && $request instanceof SymfonyRequest) {
-            if (!class_exists(Psr17Factory::class)) {
-                throw new \InvalidArgumentException('You need to install "nyholm/psr7" and "symfony/psr-http-message-bridge" in order to handle Symfony requests!');
+            if (! class_exists(Psr17Factory::class)) {
+                throw new InvalidArgumentException('You need to install "nyholm/psr7" and "symfony/psr-http-message-bridge" in order to handle Symfony requests!');
             }
 
-            $psr17Factory = new Psr17Factory();
+            $psr17Factory   = new Psr17Factory();
             $psrHttpFactory = new PsrHttpFactory($psr17Factory, $psr17Factory, $psr17Factory, $psr17Factory);
-            $request = $psrHttpFactory->createRequest($request);
+            $request        = $psrHttpFactory->createRequest($request);
         }
 
         if ($request instanceof RequestInterface) {
             parse_str($request->getUri()->getQuery(), $input);
 
             /**
-             * @phpstan-var ReadDataProviderCompositionInterface $result
-             *
+             * @phpstan-var J $result
              * @phpstan-ignore argument.type
              */
             $result = $target->handleInput($input, $fieldsOperator, $fieldsIgnoreCase);
@@ -325,6 +334,6 @@ class DataSource implements ReadDataProviderInterface
             return $result;
         }
 
-        throw new \RuntimeException(\sprintf('Unsupported request type: %s', $request::class));
+        throw new RuntimeException(sprintf('Unsupported request type: %s', $request::class));
     }
 }
