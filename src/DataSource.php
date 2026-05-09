@@ -16,6 +16,7 @@ use Kraz\ReadModel\ReadDataProviderCompositionInterface;
 use Kraz\ReadModel\ReadDataProviderInterface;
 use Kraz\ReadModel\ReadDataProviderPayload;
 use Kraz\ReadModel\ReadResponse;
+use Kraz\ReadModel\Tools\CollectionUtils;
 use LogicException;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Override;
@@ -228,7 +229,15 @@ class DataSource implements ReadDataProviderInterface
     #[Override]
     public function data(): array
     {
-        return iterator_to_array($this->getIterator());
+        $data = iterator_to_array($this->getIterator());
+        if ($this->isValue()) {
+            $rootIdentifier = $this->getOrCreateQueryExpressionProvider()->requireSingleRootIdentifier();
+            $values         = $this->collectInputValues();
+
+            return CollectionUtils::sortByIndex($data, $rootIdentifier, $values);
+        }
+
+        return $data;
     }
 
     #[Override]
@@ -236,17 +245,16 @@ class DataSource implements ReadDataProviderInterface
     {
         $this->assertNoSpecifications();
 
-        if ($this->isValue()) {
-            return $this->data();
-        }
-
         $data = $this->data();
 
-        return ReadResponse::create(
-            $data,
-            $this->isPaginated() ? ($this->paginator()?->getCurrentPage() ?? 1) : 1,
-            $this->totalCount(),
-        );
+        if ($this->isValue()) {
+            return $data;
+        }
+
+        $page  = $this->isPaginated() ? ($this->paginator()?->getCurrentPage() ?? 1) : 1;
+        $total = $this->totalCount();
+
+        return ReadResponse::create($data, $page, $total);
     }
 
     /** @return PaginatorInterface<T>|null */
