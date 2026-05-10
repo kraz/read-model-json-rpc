@@ -22,7 +22,7 @@ class DataSourceBuilder implements ReadDataProviderCompositionInterface, ReadDat
     /** @use ReadDataProviderBuilder<T> */
     use ReadDataProviderBuilder;
 
-    private mixed $data;
+    private mixed $data = null;
 
     /**
      * @phpstan-param JsonRpcClientInterface&JsonRpcReadClientInterface<J> $data
