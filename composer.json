@@ -17,8 +17,8 @@
     "require": {
         "php": ">=8.4",
         "ext-mbstring": "*",
-        "kraz/json-rpc-client": "dev-main",
-        "kraz/read-model": "dev-main",
+        "kraz/json-rpc-client": "^1.0",
+        "kraz/read-model": "^1.0",
         "webmozart/assert": "^2.3"
     },
     "require-dev": {

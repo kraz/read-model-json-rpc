@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Kraz\ReadModelJsonRpc;
 
+use InvalidArgumentException;
 use Kraz\JsonRpcClient\JsonRpcBatchResponse;
 use Kraz\JsonRpcClient\JsonRpcClientInterface;
 use Kraz\JsonRpcClient\JsonRpcResponse;
@@ -12,12 +13,13 @@ use Kraz\ReadModel\Tools\CollectionUtils;
 use Override;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
-use Webmozart\Assert\Assert;
 
 use function array_values;
 use function count;
+use function get_debug_type;
 use function is_array;
 use function is_object;
+use function is_scalar;
 use function json_encode;
 use function reset;
 use function sprintf;
@@ -71,9 +73,13 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
             /** @var T|T[] $readResponse */
             $readResponse = $this->denormalizer->denormalize($result, $responseClassName);
             if (str_ends_with($responseClassName, '[]')) {
-                Assert::isArray($readResponse);
+                if (! is_array($readResponse)) {
+                    throw new InvalidArgumentException(sprintf('Expected an array. Got: %s', get_debug_type($readResponse)));
+                }
             } else {
-                Assert::isInstanceOf($readResponse, $responseClassName);
+                if (! ($readResponse instanceof $responseClassName)) {
+                    throw new InvalidArgumentException(sprintf('Expected an instance of %s. Got: %s', $responseClassName, get_debug_type($readResponse)));
+                }
             }
         } else {
             $readResponse = $result;
@@ -101,7 +107,9 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
 
         if ($responseClassName !== null) {
             $readResponse = $this->denormalizer->denormalize($result, $responseClassName);
-            Assert::isInstanceOf($readResponse, $responseClassName);
+            if (! ($readResponse instanceof $responseClassName)) {
+                throw new InvalidArgumentException(sprintf('Expected an instance of %s. Got: %s', $responseClassName, get_debug_type($readResponse)));
+            }
         } else {
             $readResponse = $result;
         }
@@ -135,7 +143,10 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
             $readResponse = [];
             foreach ($result as $item) {
                 $element = $this->denormalizer->denormalize($item, $itemClassName);
-                Assert::isInstanceOf($element, $itemClassName);
+                if (! ($element instanceof $itemClassName)) {
+                    throw new InvalidArgumentException(sprintf('Expected an instance of %s. Got: %s', $itemClassName, get_debug_type($element)));
+                }
+
                 $readResponse[] = $element;
             }
         } else {
@@ -175,9 +186,13 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
             /** @var T|T[] $readResponse */
             $readResponse = $this->denormalizer->denormalize($result, $responseClassName);
             if (str_ends_with($responseClassName, '[]')) {
-                Assert::isArray($readResponse);
+                if (! is_array($readResponse)) {
+                    throw new InvalidArgumentException(sprintf('Expected an array. Got: %s', get_debug_type($readResponse)));
+                }
             } else {
-                Assert::isInstanceOf($readResponse, $responseClassName);
+                if (! ($readResponse instanceof $responseClassName)) {
+                    throw new InvalidArgumentException(sprintf('Expected an instance of %s. Got: %s', $responseClassName, get_debug_type($readResponse)));
+                }
             }
         } else {
             $readResponse = $result;
@@ -203,7 +218,10 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
         $query = QueryExpression::create();
         $expr  = $query->expr();
         foreach ($criteria as $field => $value) {
-            Assert::nullOrScalar($value);
+            if ($value !== null && ! is_scalar($value)) {
+                throw new InvalidArgumentException(sprintf('Expected a scalar or null. Got: %s', get_debug_type($value)));
+            }
+
             $query = $query->andWhere($value === null ? $expr->isNull($field) : $expr->equalTo($field, $value));
         }
 
