@@ -360,16 +360,22 @@ final class DataSourceTest extends TestCase
     // Specifications
     // -------------------------------------------------------------------------
 
+    public function testWithSpecificationWithoutLimitThrows(): void
+    {
+        $this->expectException(LogicException::class);
+        $this->makeDs()->withSpecification(new StatusEqualsSpecification('active'))->data();
+    }
+
     public function testWithSpecificationFiltersItemsInPhp(): void
     {
-        $ds = $this->makeDs()->withSpecification(new StatusEqualsSpecification('active'));
+        $ds = $this->makeDs()->withLimit(100)->withSpecification(new StatusEqualsSpecification('active'));
 
         self::assertSame(['A001', 'A002', 'A005'], $this->ids($ds->data()));
     }
 
     public function testWithSpecificationFiltersByValueRange(): void
     {
-        $ds = $this->makeDs()->withSpecification(new OrderValueAboveSpecification(150.0));
+        $ds = $this->makeDs()->withLimit(100)->withSpecification(new OrderValueAboveSpecification(150.0));
 
         self::assertSame(['A002', 'A004'], $this->ids($ds->data()));
     }
@@ -377,6 +383,7 @@ final class DataSourceTest extends TestCase
     public function testMultipleSpecificationsAreCombinedWithAnd(): void
     {
         $ds = $this->makeDs()
+            ->withLimit(100)
             ->withSpecification(new StatusEqualsSpecification('active'))
             ->withSpecification(new OrderValueAboveSpecification(100.0), true);
 
@@ -386,7 +393,7 @@ final class DataSourceTest extends TestCase
     public function testInvertedSpecificationFiltersOppositeItems(): void
     {
         $spec = (new StatusEqualsSpecification('active'))->invert();
-        $ds   = $this->makeDs()->withSpecification($spec);
+        $ds   = $this->makeDs()->withLimit(100)->withSpecification($spec);
 
         self::assertSame(['A003', 'A004'], $this->ids($ds->data()));
     }
@@ -403,6 +410,7 @@ final class DataSourceTest extends TestCase
     public function testWithoutSpecificationUndoRestoresPrevious(): void
     {
         $ds = $this->makeDs()
+            ->withLimit(100)
             ->withSpecification(new StatusEqualsSpecification('active'))
             ->withSpecification(new OrderValueAboveSpecification(100.0), true);
 
