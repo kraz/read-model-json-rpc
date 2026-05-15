@@ -7,10 +7,15 @@ namespace Kraz\ReadModelJsonRpc\Tests\Fixtures;
 use Kraz\JsonRpcClient\JsonRpcBatchResponse;
 use Kraz\JsonRpcClient\JsonRpcClientInterface;
 use Kraz\JsonRpcClient\JsonRpcResponse;
+use Kraz\ReadModel\CursorReadResponse;
+use Kraz\ReadModel\DataSource as InMemoryDataSource;
+use Kraz\ReadModel\Pagination\Cursor\CursorCodecInterface;
+use Kraz\ReadModel\Query\QueryExpression;
 use Kraz\ReadModel\ReadResponse;
 use Kraz\ReadModelJsonRpc\JsonRpcReadClientInterface;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseInterface;
+use RuntimeException;
 
 use function array_slice;
 use function count;
@@ -19,7 +24,9 @@ use function max;
 
 /**
  * In-memory stub for JSON-RPC client. Slices seeded items based on
- * page/pageSize or limit/offset params sent by DataSource.
+ * page/pageSize or limit/offset params sent by DataSource. Cursor params are
+ * delegated to the in-memory {@see InMemoryDataSource} so the fake exercises
+ * the real keyset pagination paths instead of re-implementing them.
  *
  * @implements JsonRpcReadClientInterface<array<string, mixed>>
  */
@@ -29,14 +36,20 @@ final class FakeJsonRpcClient implements JsonRpcClientInterface, JsonRpcReadClie
     private array|null $lastReadParams = null;
 
     /** @param list<array<string, mixed>> $items */
-    public function __construct(private readonly array $items = [])
-    {
+    public function __construct(
+        private readonly array $items = [],
+        private readonly CursorCodecInterface|null $cursorCodec = null,
+    ) {
     }
 
-    /** @return ReadResponse<array<string, mixed>> */
-    public function read(array|null $params = null): ReadResponse
+    /** @return ReadResponse<array<string, mixed>>|CursorReadResponse<array<string, mixed>> */
+    public function read(array|null $params = null): ReadResponse|CursorReadResponse
     {
         $this->lastReadParams = $params;
+
+        if (isset($params['cursor']) || isset($params['cursorLimit'])) {
+            return $this->readCursor($params);
+        }
 
         $total = count($this->items);
 
@@ -58,6 +71,34 @@ final class FakeJsonRpcClient implements JsonRpcClientInterface, JsonRpcReadClie
         }
 
         return ReadResponse::create($this->items, 1, $total);
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     *
+     * @return CursorReadResponse<array<string, mixed>>
+     */
+    private function readCursor(array $params): CursorReadResponse
+    {
+        /** @var InMemoryDataSource<array<string, mixed>> $ds */
+        $ds = new InMemoryDataSource($this->items, cursorCodec: $this->cursorCodec);
+
+        $qe = QueryExpression::create($params);
+        if (! $qe->isEmpty()) {
+            $ds = $ds->withQueryExpression($qe);
+        }
+
+        $cursor      = isset($params['cursor']) ? (string) $params['cursor'] : null;
+        $cursorLimit = max(0, (int) ($params['cursorLimit'] ?? 0));
+        $ds          = $ds->withCursor($cursor, $cursorLimit);
+
+        /** @var CursorReadResponse<array<string, mixed>>|mixed $result */
+        $result = $ds->getResult();
+        if (! ($result instanceof CursorReadResponse)) {
+            throw new RuntimeException('Expected a CursorReadResponse from the in-memory data source.');
+        }
+
+        return $result;
     }
 
     /** @phpstan-param array<string, mixed> $params */

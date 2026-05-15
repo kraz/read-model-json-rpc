@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use Kraz\JsonRpcClient\JsonRpcBatchResponse;
 use Kraz\JsonRpcClient\JsonRpcClientInterface;
 use Kraz\JsonRpcClient\JsonRpcResponse;
+use Kraz\ReadModel\CursorReadResponse;
 use Kraz\ReadModel\Query\QueryExpression;
 use Kraz\ReadModel\Tools\CollectionUtils;
 use Override;
@@ -112,6 +113,34 @@ abstract class JsonRpcClientGateway implements JsonRpcClientInterface
             }
         } else {
             $readResponse = $result;
+        }
+
+        return $readResponse;
+    }
+
+    /**
+     * Companion to {@see self::handleRead()} for cursor-paginated reads. The server
+     * is expected to interpret cursor params (typically `cursor`/`cursorLimit`) and
+     * respond with a serialized {@see CursorReadResponse}; this method just
+     * denormalizes the result into the requested class.
+     *
+     * @phpstan-param array<string, mixed>|null $params
+     * @phpstan-param class-string<T>           $responseClassName
+     *
+     * @phpstan-return T
+     *
+     * @phpstan-template T of CursorReadResponse<array<string, mixed>|object>
+     */
+    protected function handleReadCursor(array|null $params, string $responseClassName = CursorReadResponse::class): CursorReadResponse
+    {
+        $response = $this->api->call('read', $params ?? []);
+
+        /** @var array<string, mixed>|null $result */
+        $result = $response->getResult();
+
+        $readResponse = $this->denormalizer->denormalize($result, $responseClassName);
+        if (! ($readResponse instanceof $responseClassName)) {
+            throw new InvalidArgumentException(sprintf('Expected an instance of %s. Got: %s', $responseClassName, get_debug_type($readResponse)));
         }
 
         return $readResponse;

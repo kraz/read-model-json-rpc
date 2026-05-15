@@ -53,6 +53,8 @@ class DataSourceBuilder implements ReadDataProviderCompositionInterface, ReadDat
         string $pageSizeParamName = 'pageSize',
         string $limitParamName = 'limit',
         string $offsetParamName = 'offset',
+        string $cursorParamName = 'cursor',
+        string $cursorLimitParamName = 'cursorLimit',
     ): DataSource {
         $data ??= $this->data;
         if ($data === null) {
@@ -64,7 +66,15 @@ class DataSourceBuilder implements ReadDataProviderCompositionInterface, ReadDat
         }
 
         /** @phpstan-var DataSource<J> $dataSource */
-        $dataSource = new DataSource($data, $pageParamName, $pageSizeParamName, $limitParamName, $offsetParamName);
+        $dataSource = new DataSource(
+            $data,
+            $pageParamName,
+            $pageSizeParamName,
+            $limitParamName,
+            $offsetParamName,
+            $cursorParamName,
+            $cursorLimitParamName,
+        );
 
         return $this->apply($dataSource);
     }

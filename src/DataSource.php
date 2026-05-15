@@ -7,6 +7,8 @@ namespace Kraz\ReadModelJsonRpc;
 use ArrayIterator;
 use InvalidArgumentException;
 use Kraz\JsonRpcClient\JsonRpcClientInterface;
+use Kraz\ReadModel\CursorReadResponse;
+use Kraz\ReadModel\Pagination\Cursor\CursorPaginatorInterface;
 use Kraz\ReadModel\Pagination\InMemoryPaginator;
 use Kraz\ReadModel\Pagination\PaginatorInterface;
 use Kraz\ReadModel\Query\QueryExpression;
@@ -47,6 +49,10 @@ class DataSource implements ReadDataProviderInterface
     private ReadDataProviderPayload|null $payload = null;
     /** @phpstan-var PaginatorInterface<T>|null */
     private PaginatorInterface|null $paginatorInstance = null;
+    /** @phpstan-var CursorReadResponse<T>|null */
+    private CursorReadResponse|null $cursorResponse = null;
+    /** @phpstan-var CursorPaginatorInterface<T>|null */
+    private CursorPaginatorInterface|null $cursorPaginatorInstance = null;
 
     /** @phpstan-param JsonRpcClientInterface&JsonRpcReadClientInterface<T> $client */
     public function __construct(
@@ -55,6 +61,8 @@ class DataSource implements ReadDataProviderInterface
         private readonly string $pageSizeParamName = 'pageSize',
         private readonly string $limitParamName = 'limit',
         private readonly string $offsetParamName = 'offset',
+        private readonly string $cursorParamName = 'cursor',
+        private readonly string $cursorLimitParamName = 'cursorLimit',
     ) {
     }
 
@@ -65,14 +73,36 @@ class DataSource implements ReadDataProviderInterface
             return $this->payload;
         }
 
-        /** @phpstan-var ReadResponse<T> $result */
         $result = $this->client->read($this->getParams());
+        if ($result instanceof CursorReadResponse) {
+            throw new RuntimeException('Server returned a cursor response but the data source is not in cursor mode.');
+        }
+
+        /** @phpstan-var ReadResponse<T> $result */
 
         /** @phpstan-var ReadDataProviderPayload<T> $payload */
         $payload       = new ReadDataProviderPayload($result);
         $this->payload = $payload;
 
         return $this->payload;
+    }
+
+    /** @return CursorReadResponse<T> */
+    private function getCursorResponse(): CursorReadResponse
+    {
+        if ($this->cursorResponse !== null) {
+            return $this->cursorResponse;
+        }
+
+        $result = $this->client->read($this->getParams());
+        if (! ($result instanceof CursorReadResponse)) {
+            throw new RuntimeException('Server did not return a cursor response while the data source is in cursor mode.');
+        }
+
+        /** @phpstan-var CursorReadResponse<T> $result */
+        $this->cursorResponse = $result;
+
+        return $this->cursorResponse;
     }
 
     /** @phpstan-return array<string, mixed> */
@@ -86,7 +116,13 @@ class DataSource implements ReadDataProviderInterface
             }
         }
 
-        if ($this->pagination !== null) {
+        if ($this->cursor !== null) {
+            [$token, $cursorLimit]               = $this->cursor;
+            $params[$this->cursorLimitParamName] = $cursorLimit;
+            if ($token !== null) {
+                $params[$this->cursorParamName] = $token;
+            }
+        } elseif ($this->pagination !== null) {
             [$page, $itemsPerPage]            = $this->pagination;
             $params[$this->pageParamName]     = $page;
             $params[$this->pageSizeParamName] = $itemsPerPage;
@@ -110,7 +146,11 @@ class DataSource implements ReadDataProviderInterface
     /** @return array<int, T> */
     private function filteredItems(): array
     {
-        $items = $this->getPayload()->getData();
+        if ($this->cursor !== null) {
+            $items = $this->getCursorResponse()->data ?? [];
+        } else {
+            $items = $this->getPayload()->getData();
+        }
 
         if (count($this->specifications) === 0) {
             return $items;
@@ -133,6 +173,11 @@ class DataSource implements ReadDataProviderInterface
     {
         $this->assertNoSpecifications();
 
+        $cursorPaginator = $this->cursorPaginator();
+        if ($cursorPaginator !== null) {
+            return $cursorPaginator->count();
+        }
+
         $paginator = $this->paginator();
         if ($paginator !== null) {
             return $paginator->count();
@@ -145,6 +190,10 @@ class DataSource implements ReadDataProviderInterface
     public function totalCount(): int
     {
         $this->assertNoSpecifications();
+
+        if ($this->cursor !== null) {
+            return $this->cursorPaginator()?->getTotalItems() ?? 0;
+        }
 
         return $this->getPayload()->getTotalItems();
     }
@@ -163,6 +212,12 @@ class DataSource implements ReadDataProviderInterface
         [$page, $itemsPerPage] = $this->pagination;
 
         return $page > 0 && $itemsPerPage > 0;
+    }
+
+    #[Override]
+    public function isCursored(): bool
+    {
+        return $this->cursor !== null;
     }
 
     #[Override]
@@ -187,8 +242,13 @@ class DataSource implements ReadDataProviderInterface
             return;
         }
 
-        $paginator = $this->paginator();
-        $items     = $paginator?->getIterator() ?? new ArrayIterator($this->filteredItems());
+        $cursorPaginator = $this->cursorPaginator();
+        if ($cursorPaginator !== null) {
+            $items = $cursorPaginator->getIterator();
+        } else {
+            $paginator = $this->paginator();
+            $items     = $paginator?->getIterator() ?? new ArrayIterator($this->filteredItems());
+        }
 
         $itemNormalizer = $this->itemNormalizer;
         if ($itemNormalizer !== null) {
@@ -203,9 +263,15 @@ class DataSource implements ReadDataProviderInterface
     }
 
     /** @return PaginatorInterface<T>|null */
+    #[Override]
     public function paginator(): PaginatorInterface|null
     {
         $this->assertNoSpecifications();
+
+        if ($this->cursor !== null) {
+            // Cursor mode is mutually exclusive with offset/page pagination.
+            return null;
+        }
 
         if ($this->paginatorInstance !== null) {
             return $this->paginatorInstance;
@@ -229,6 +295,29 @@ class DataSource implements ReadDataProviderInterface
         return $this->paginatorInstance;
     }
 
+    /** @return CursorPaginatorInterface<T>|null */
+    #[Override]
+    public function cursorPaginator(): CursorPaginatorInterface|null
+    {
+        $this->assertNoSpecifications();
+
+        if ($this->cursorPaginatorInstance !== null) {
+            return $this->cursorPaginatorInstance;
+        }
+
+        if ($this->cursor === null) {
+            return null;
+        }
+
+        [, $cursorLimit] = $this->cursor;
+
+        /** @phpstan-var JsonRpcCursorPaginator<T> $paginator */
+        $paginator                     = new JsonRpcCursorPaginator($this->getCursorResponse(), $cursorLimit);
+        $this->cursorPaginatorInstance = $paginator;
+
+        return $paginator;
+    }
+
     #[Override]
     public function handleRequest(object $request, array $fieldsOperator = [], array $fieldsIgnoreCase = []): static
     {
@@ -240,8 +329,10 @@ class DataSource implements ReadDataProviderInterface
 
     public function __clone()
     {
-        $this->payload           = null;
-        $this->paginatorInstance = null;
+        $this->payload                 = null;
+        $this->paginatorInstance       = null;
+        $this->cursorResponse          = null;
+        $this->cursorPaginatorInstance = null;
     }
 
     /**
