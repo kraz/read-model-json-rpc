@@ -1,9 +1,19 @@
 # Read Model - JSON-RPC 2.0
 
-This library is JSON RPC 2.0 implementation of the Domain Read Model.
+[![CI](https://github.com/kraz/read-model-json-rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/kraz/read-model-json-rpc/actions/workflows/ci.yml)
+[![Packagist Version](https://img.shields.io/packagist/v/kraz/read-model-json-rpc)](https://packagist.org/packages/kraz/read-model-json-rpc)
+[![GitHub license](https://img.shields.io/github/license/kraz/read-model-json-rpc)](LICENSE)
 
-> [!WARNING]  
-> This library is still work in progress!
+JSON RPC 2.0 implementation for the [Read Models Domain](https://github.com/kraz/read-model).
+
+> [!NOTE]
+> This library expects a [read model](https://github.com/kraz/read-model) exposed as JSON-RPC 2.0 API.
+
+## Installation
+
+```bash
+composer require kraz/read-model-json-rpc
+```
 
 ## License
 
